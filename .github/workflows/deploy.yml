@@ -1,0 +1,147 @@
+name: Deploy USERDETAILS Backend (Production - Docker)
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup backend directory
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          script: |
+            sudo mkdir -p /var/www/python.sicsglobal.com/userdetails_backend
+            sudo chown -R $USER:$USER /var/www/python.sicsglobal.com/userdetails_backend
+            sudo chmod -R 755 /var/www/python.sicsglobal.com/userdetails_backend
+
+            sudo mkdir -p /var/www/python.sicsglobal.com/userdetails_backend/{current,uploads,backups,mongo_backups}
+            sudo chown -R $USER:$USER /var/www/python.sicsglobal.com/userdetails_backend
+
+      - name: Create backup on server
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          script: |
+            cd /var/www/python.sicsglobal.com/userdetails_backend
+            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+
+            if [ -d "current" ] && [ "$(ls -A current)" ]; then
+              echo "Creating backup of current deployment..."
+              tar -czf backups/backup_$TIMESTAMP.tar.gz current uploads .env || true
+
+              if docker ps | grep userdetails_mongo_prod; then
+                echo "Creating MongoDB backup..."
+                docker exec userdetails_mongo_prod mongodump \
+                  --archive --gzip --db userdetails_db \
+                  > mongo_backups/mongo_backup_$TIMESTAMP.gz
+              fi
+            else
+              echo "No existing deployment found, skipping backup"
+            fi
+
+      - name: Copy backend files to server
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          source: "./"
+          target: "/var/www/python.sicsglobal.com/userdetails_backend/current/"
+          strip_components: 1
+          overwrite: true
+
+      - name: Deploy with Docker
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          script: |
+            cd /var/www/python.sicsglobal.com/userdetails_backend/current
+
+            # Create .env file
+            cat > .env <<EOF
+            PORT=6002
+            NODE_ENV=production
+            MONGO_URI=mongodb://mongo:27017/userdetails_db
+            CORS_ORIGIN=https://python.sicsglobal.com
+            EOF
+
+            chmod 600 .env
+
+            # Stop existing containers
+            docker compose -f docker-compose-prod.yml down || true
+
+            # Build and start containers
+            if docker compose -f docker-compose-prod.yml up -d --build; then
+              echo "Containers started successfully"
+
+              echo "Waiting for backend to be ready..."
+              sleep 20
+
+              echo "Performing health check..."
+              if ! curl --max-time 10 --retry 3 --retry-delay 5 --fail http://localhost:6002/; then
+                echo "::error::Health check failed"
+                exit 1
+              fi
+
+              # Cleanup old backups (keep last 5)
+              cd /var/www/python.sicsglobal.com/userdetails_backend/backups
+              ls -t | tail -n +6 | xargs rm -f || true
+
+              cd /var/www/python.sicsglobal.com/userdetails_backend/mongo_backups
+              ls -t | tail -n +6 | xargs rm -f || true
+            else
+              echo "::error::Container startup failed, initiating rollback"
+
+              cd /var/www/python.sicsglobal.com/userdetails_backend
+              docker compose -f current/docker-compose-prod.yml down || true
+
+              LATEST_BACKUP=$(ls -t backups/ | head -1)
+              LATEST_MONGO_BACKUP=$(ls -t mongo_backups/ | head -1)
+
+              if [ -n "$LATEST_BACKUP" ]; then
+                echo "Restoring from backup: $LATEST_BACKUP"
+                rm -rf current/*
+                tar -xzf backups/$LATEST_BACKUP -C .
+
+                if [ -n "$LATEST_MONGO_BACKUP" ]; then
+                  docker compose -f current/docker-compose-prod.yml up -d mongo
+                  sleep 10
+                  docker exec -i userdetails_mongo_prod mongorestore \
+                    --archive --gzip --drop < mongo_backups/$LATEST_MONGO_BACKUP
+                fi
+
+                cd current
+                docker compose -f docker-compose-prod.yml up -d
+
+                if curl --max-time 10 --fail http://localhost:6002/; then
+                  echo "Rollback completed successfully"
+                  exit 1
+                else
+                  echo "::error::Rollback health check failed"
+                  exit 1
+                fi
+              else
+                echo "::error::No backup available for rollback"
+                exit 1
+              fi
+            fi
+
+            echo "Deployment verification:"
+            docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+            echo "Application health:"
+            curl -I http://localhost:6002/
