@@ -1,0 +1,58 @@
+services:
+  attendance_backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: attendance_backend_prod
+    restart: unless-stopped
+    ports:
+      - "6001:6001"
+    environment:
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongo:27017/attendance_db
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - UPLOAD_DIR=/app/uploads/
+      - EMAIL_SERVICE=${EMAIL_SERVICE}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASS=${EMAIL_PASS}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./models:/app/models
+      - ./utils:/app/utils
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6001/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks:
+      - attendance_network
+
+  mongo:
+    image: mongo:latest
+    container_name: attendance_mongo_prod
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh attendance_db --quiet | grep 1
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks:
+      - attendance_network
+
+volumes:
+  mongo_data:
+
+networks:
+  attendance_network:
+    driver: bridge
