@@ -7,7 +7,7 @@ services:
     container_name: userdetails_backend_prod
     restart: unless-stopped
     ports:
-      - "6002:6002"
+      - "6002:80"
     environment:
       - NODE_ENV=production
       - PORT=6002
