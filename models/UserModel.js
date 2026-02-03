@@ -1,76 +1,27 @@
 const mongoose = require("mongoose");
 
-const geoSchema = new mongoose.Schema({
-  lat: {
-    type: String,
-    required: true
-  },
-  lng: {
-    type: String,
-    required: true
-  }
-}, { _id: false });
-
-const addressSchema = new mongoose.Schema({
-  street: {
-    type: String,
-    required: true
-  },
-  suite: {
-    type: String
-  },
-  city: {
-    type: String,
-    required: true
-  },
-  zipcode: {
-    type: String,
-    required: true
-  },
-  geo: geoSchema
-}, { _id: false });
-
-const companySchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true
-  },
-  catchPhrase: {
-    type: String
-  },
-  bs: {
-    type: String
-  }
-}, { _id: false });
-
 const userSchema = new mongoose.Schema({
-  id: {
-    type: Number,
-    unique: true
-  },
   name: {
-    type: String,
-    required: true
-  },
-  username: {
-    type: String,
-    required: true
-  },
-  email: {
     type: String,
     required: true,
-    unique: true
   },
-  address: addressSchema,
-  phone: {
-    type: String
+  email: {  
+    type: String,
+    required: true,
+    unique : true
   },
-  website: {
-    type: String
+  contactNumber: {
+    type: String,
+    required: true,
+    unique:true
   },
-  company: companySchema
-}, {
-  timestamps: true
-});
-
+  address: {
+    type: String,
+    required: true,
+  },
+  password: {
+    type: String,
+    required: true,
+  },
+}, { timestamps: true });
 module.exports = mongoose.model("User", userSchema);
